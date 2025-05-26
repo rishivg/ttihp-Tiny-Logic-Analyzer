@@ -23,21 +23,21 @@ module tb;
     .ena(ena)
   );
 
+  // Clock generation
+  always #5 clk = ~clk;
+
   initial begin
-    // Just basic init — doesn't do anything.
+    // Initial values
+    clk = 0;
     ui_in = 0;
     uio_in = 0;
-    clk = 0;
-    rst_n = 0;
     ena = 1;
+    rst_n = 0;
 
     #10;
     rst_n = 1;
 
-    #100;
-    $finish;
+    // DO NOT call $finish — Cocotb handles termination
   end
-
-  always #5 clk = ~clk;
 
 endmodule
