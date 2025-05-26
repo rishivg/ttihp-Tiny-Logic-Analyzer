@@ -14,6 +14,7 @@ module raw_capture (
       sample <= in_data;
   end
 
-  assign out_data = {4'b0000, sample};
-
+  always @(*) begin
+    out_data = {4'b0000, sample};
+  end
 endmodule
