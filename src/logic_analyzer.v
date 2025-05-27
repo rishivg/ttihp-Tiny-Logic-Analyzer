@@ -15,14 +15,14 @@ module tt_um_logic_analyzer_combo (
     input  wire       rst_n
 );
 
-  wire _unused = ena;
-  assign uio_out = 8'h00;
-  assign uio_oe  = 8'h00;
+  wire _unused = ena | &uio_in[6:1]; // Acknowledge unused uio_in[6:1]
+  assign uio_out[6:0] = 7'b0;
+  assign uio_oe[6:0]  = 7'b0;
 
   wire [3:0] mode = ui_in[7:4];
   wire arm = ui_in[4];
   wire [3:0] channels = ui_in[3:0];
-  wire read_en = uio_in[0];
+  wire replay_en = (mode == 4'b1100);
   wire autodetect_mode = (mode == 4'b1010);
 
   // --- Protocol Selection FSM ---
@@ -90,6 +90,7 @@ module tt_um_logic_analyzer_combo (
   // --- FIFO Integration ---
   wire [15:0] fifo_word;
   wire fifo_valid;
+  wire dummy_overflow;
 
   wire uart_mode = auto_en && proto_sel == 2'b01;
   wire spi_mode  = auto_en && proto_sel == 2'b10;
@@ -99,7 +100,7 @@ module tt_um_logic_analyzer_combo (
     (uart_mode) ? 2'b00 :
     (spi_mode)  ? 2'b01 :
     (i2c_mode)  ? 2'b10 :
-                  2'b11;  // default
+                  2'b11;
 
   fifo buffer (
     .clk(clk),
@@ -111,10 +112,10 @@ module tt_um_logic_analyzer_combo (
     .write_en((uart_mode && uart_valid) ||
               (spi_mode  && spi_valid) ||
               (i2c_mode  && i2c_valid)),
-    .read_en(read_en),
+    .read_en((uio_in[0]) || (replay_en && !replay_active && fifo_valid)),
     .read_data(fifo_word),
     .valid(fifo_valid),
-    .overflow()  // optional
+    .overflow(dummy_overflow)
   );
 
   // --- Logic Analyzer Submodules ---
@@ -148,8 +149,52 @@ module tt_um_logic_analyzer_combo (
     .in_data(channels), .out_data(out_pattern)
   );
 
-  // --- Output Selection ---
-  assign uo_out =
+  // --- Replay Mode Logic ---
+  reg [2:0] bit_cnt;
+  reg [7:0] shift_reg;
+  reg [7:0] replay_byte;
+  reg [3:0] clk_div;
+  reg replay_bit;
+  reg replay_active;
+
+  always @(posedge clk or negedge rst_n) begin
+    if (!rst_n) begin
+      bit_cnt <= 0;
+      shift_reg <= 0;
+      replay_byte <= 0;
+      clk_div <= 0;
+      replay_bit <= 0;
+      replay_active <= 0;
+    end else if (replay_en) begin
+      clk_div <= clk_div + 1;
+
+      if (!replay_active && fifo_valid) begin
+        replay_byte <= fifo_word[7:0];
+        shift_reg <= fifo_word[7:0];
+        bit_cnt <= 0;
+        replay_active <= 1;
+      end
+
+      if (replay_active && clk_div == 4'b1111) begin
+        replay_bit <= shift_reg[7];
+        shift_reg <= {shift_reg[6:0], 1'b0};
+        bit_cnt <= bit_cnt + 1;
+        if (bit_cnt == 3'd7) begin
+          replay_active <= 0;
+        end
+      end
+    end else begin
+      clk_div <= 0;
+      replay_bit <= 0;
+      replay_active <= 0;
+    end
+  end
+
+  assign uio_out[7] = replay_en ? replay_bit : 1'b0;
+  assign uio_oe[7]  = replay_en ? 1'b1       : 1'b0;
+
+  // --- Output Mux ---
+  wire [7:0] selected_output =
     (auto_en && proto_sel == 2'b00) ? {5'b00000, i2c_detected, spi_detected, uart_detected} :
     (uart_mode || spi_mode || i2c_mode) ? {fifo_word[15:14], fifo_word[7:0]} :
     raw_en    ? out_raw :
@@ -159,5 +204,10 @@ module tt_um_logic_analyzer_combo (
     pulse_en  ? out_pulse :
     patt_en   ? out_pattern :
     8'h00;
+
+  assign uo_out = selected_output;
+
+  // Silence unused
+  wire _unused2 = fifo_valid | &fifo_word[13:8];
 
 endmodule
