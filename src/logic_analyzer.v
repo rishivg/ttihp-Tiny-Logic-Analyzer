@@ -25,6 +25,7 @@ module tt_um_logic_analyzer_combo (
   wire read_en = uio_in[0];
   wire autodetect_mode = (mode == 4'b1010);
 
+  // --- Protocol Selection FSM ---
   reg [1:0] proto_sel;  // 00 = none, 01 = UART, 10 = SPI, 11 = I2C
   wire uart_detected, spi_detected, i2c_detected;
 
@@ -55,6 +56,7 @@ module tt_um_logic_analyzer_combo (
 
   wire [7:0] out_raw, out_trigger, out_timestamp, out_glitch, out_pulse, out_pattern;
 
+  // --- Shared Decoders ---
   wire [7:0] uart_out, spi_out, i2c_out;
   wire uart_valid, spi_valid, i2c_valid;
 
@@ -85,26 +87,37 @@ module tt_um_logic_analyzer_combo (
     .detected(i2c_detected)
   );
 
-  wire [7:0] fifo_data_out;
+  // --- FIFO Integration ---
+  wire [15:0] fifo_word;
   wire fifo_valid;
 
   wire uart_mode = auto_en && proto_sel == 2'b01;
   wire spi_mode  = auto_en && proto_sel == 2'b10;
   wire i2c_mode  = auto_en && proto_sel == 2'b11;
 
+  wire [1:0] proto_id =
+    (uart_mode) ? 2'b00 :
+    (spi_mode)  ? 2'b01 :
+    (i2c_mode)  ? 2'b10 :
+                  2'b11;  // default
+
   fifo buffer (
-    .clk(clk), .rst_n(rst_n),
-    .write_data(uart_mode ? uart_out :
-                spi_mode  ? spi_out  :
-                i2c_mode  ? i2c_out  : 8'h00),
+    .clk(clk),
+    .rst_n(rst_n),
+    .proto_id(proto_id),
+    .data_in(uart_mode ? uart_out :
+             spi_mode  ? spi_out  :
+             i2c_mode  ? i2c_out  : 8'h00),
     .write_en((uart_mode && uart_valid) ||
               (spi_mode  && spi_valid) ||
               (i2c_mode  && i2c_valid)),
     .read_en(read_en),
-    .read_data(fifo_data_out),
-    .valid(fifo_valid)
+    .read_data(fifo_word),
+    .valid(fifo_valid),
+    .overflow()  // optional
   );
 
+  // --- Logic Analyzer Submodules ---
   raw_capture raw (
     .clk(clk), .rst_n(rst_n), .arm(arm),
     .in_data(channels), .out_data(out_raw)
@@ -135,14 +148,16 @@ module tt_um_logic_analyzer_combo (
     .in_data(channels), .out_data(out_pattern)
   );
 
-  assign uo_out = (auto_en && proto_sel == 2'b00) ? {5'b00000, i2c_detected, spi_detected, uart_detected} :
-                  (uart_mode || spi_mode || i2c_mode) ? fifo_data_out :
-                  raw_en    ? out_raw :
-                  trig_en   ? out_trigger :
-                  ts_en     ? out_timestamp :
-                  glitch_en ? out_glitch :
-                  pulse_en  ? out_pulse :
-                  patt_en   ? out_pattern :
-                  8'h00;
+  // --- Output Selection ---
+  assign uo_out =
+    (auto_en && proto_sel == 2'b00) ? {5'b00000, i2c_detected, spi_detected, uart_detected} :
+    (uart_mode || spi_mode || i2c_mode) ? {fifo_word[15:14], fifo_word[7:0]} :
+    raw_en    ? out_raw :
+    trig_en   ? out_trigger :
+    ts_en     ? out_timestamp :
+    glitch_en ? out_glitch :
+    pulse_en  ? out_pulse :
+    patt_en   ? out_pattern :
+    8'h00;
 
 endmodule
