@@ -1,54 +1,64 @@
-module uart_decoder (
-  input wire clk,
-  input wire rst_n,
-  input wire rx,
-  input wire detect_only,
+// SPDX-License-Identifier: Apache-2.0
 
-  output reg [7:0] out_data,
-  output reg valid,
-  output reg detected
+module uart_decoder (
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire       detect_only,
+    input  wire       rx,               // async input
+    output reg  [7:0] out_data,
+    output reg        detected
 );
-  reg [3:0] bit_count;
+
+  wire rx_now, rx_prev;
+  wire rx_falling = rx_prev & ~rx_now; // detect start bit
+
+  shift_sampler #(
+    .WIDTH(1),
+    .DEPTH(2)
+  ) uart_sampler (
+    .clk(clk),
+    .rst_n(rst_n),
+    .in_data(rx),
+    .now(rx_now),
+    .prev(rx_prev)
+  );
+
+  reg [3:0] bit_cnt;
   reg [7:0] shift;
-  reg [15:0] clk_count;
-  reg state;
+  reg [7:0] baud_cnt;
+  reg       active;
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      bit_count <= 0;
-      shift <= 0;
-      clk_count <= 0;
-      valid <= 0;
+      active   <= 0;
+      bit_cnt  <= 0;
+      shift    <= 0;
+      baud_cnt <= 0;
+      out_data <= 0;
       detected <= 0;
-      state <= 0;
     end else begin
-      valid <= 0;
       detected <= 0;
 
-      if (rx == 0 && state == 0) begin
-        clk_count <= 0;
-        state <= 1;
+      if (!active && rx_falling) begin
+        active   <= 1;
+        bit_cnt  <= 0;
+        baud_cnt <= 0;
       end
 
-      if (state == 1) begin
-        clk_count <= clk_count + 1;
-
-        if (clk_count == 8) begin
-          shift <= {rx, shift[7:1]};
-          bit_count <= bit_count + 1;
-          clk_count <= 0;
-
-          if (bit_count == 7) begin
+      if (active) begin
+        baud_cnt <= baud_cnt + 1;
+        if (baud_cnt == 104) begin  // ~9600 baud at 1 MHz
+          baud_cnt <= 0;
+          shift <= {rx_now, shift[7:1]};
+          bit_cnt <= bit_cnt + 1;
+          if (bit_cnt == 8) begin
+            active <= 0;
+            if (!detect_only) out_data <= {rx_now, shift[7:1]};
             detected <= 1;
-            if (!detect_only) begin
-              out_data <= {rx, shift[7:1]};
-              valid <= 1;
-            end
-            bit_count <= 0;
-            state <= 0;
           end
         end
       end
     end
   end
+
 endmodule

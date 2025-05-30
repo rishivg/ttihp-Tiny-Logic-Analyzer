@@ -1,48 +1,50 @@
-module spi_decoder (
-  input wire clk,
-  input wire rst_n,
-  input wire sclk,
-  input wire mosi,
-  input wire csn,
-  input wire detect_only,
+// SPDX-License-Identifier: Apache-2.0
 
-  output reg [7:0] data_out,
-  output reg valid,
-  output reg detected
+module spi_decoder (
+    input  wire       clk,
+    input  wire       rst_n,
+    input  wire       detect_only,
+    input  wire       sck,
+    input  wire       mosi,
+    input  wire       cs_n,
+    output reg  [7:0] out_data,
+    output reg        detected
 );
+
+  wire sck_now, sck_prev, mosi_now;
+  wire sck_rising = ~sck_prev & sck_now;
+
+  shift_sampler #(.WIDTH(1), .DEPTH(2)) sck_sampler (
+    .clk(clk), .rst_n(rst_n),
+    .in_data(sck),
+    .now(sck_now), .prev(sck_prev)
+  );
+
+  shift_sampler #(.WIDTH(1), .DEPTH(2)) mosi_sampler (
+    .clk(clk), .rst_n(rst_n),
+    .in_data(mosi),
+    .now(mosi_now), .prev()
+  );
+
   reg [2:0] bit_cnt;
-  reg [7:0] shift_reg;
-  reg prev_sclk;
+  reg [7:0] shift;
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      shift_reg <= 0;
-      bit_cnt <= 0;
-      valid <= 0;
+      shift    <= 0;
+      bit_cnt  <= 0;
       detected <= 0;
-      prev_sclk <= 0;
     end else begin
-      prev_sclk <= sclk;
-      valid <= 0;
       detected <= 0;
-
-      if (!csn) begin
-        if (prev_sclk == 0 && sclk == 1) begin
-          shift_reg <= {shift_reg[6:0], mosi};
-          bit_cnt <= bit_cnt + 1;
-
-          if (bit_cnt == 3'd7) begin
-            detected <= 1;
-            if (!detect_only) begin
-              data_out <= {shift_reg[6:0], mosi};
-              valid <= 1;
-            end
-            bit_cnt <= 0;
-          end
+      if (!cs_n && sck_rising) begin
+        shift <= {shift[6:0], mosi_now};
+        bit_cnt <= bit_cnt + 1;
+        if (bit_cnt == 3'd7) begin
+          if (!detect_only) out_data <= {shift[6:0], mosi_now};
+          detected <= 1;
         end
-      end else begin
-        bit_cnt <= 0;
       end
     end
   end
+
 endmodule

@@ -132,7 +132,7 @@ module tt_um_logic_analyzer_combo (
   .pattern(ui_in[3:0]),
   .mask(uio_in[3:0]),
   .out_data(out_trigger)
-  );
+);
 
   edge_timestamper ts (
     .clk(clk), .rst_n(rst_n),
