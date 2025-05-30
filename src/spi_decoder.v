@@ -1,49 +1,36 @@
-// SPDX-License-Identifier: Apache-2.0
-
 module spi_decoder (
     input  wire       clk,
     input  wire       rst_n,
-    input  wire       detect_only,
     input  wire       sck,
     input  wire       mosi,
     input  wire       cs_n,
+    input  wire       detect_only,  // Disable decoding logic if high
     output reg  [7:0] out_data,
-    output reg        detected
+    output reg        out_valid
 );
 
-  wire sck_now, sck_prev, mosi_now;
-  wire sck_rising = ~sck_prev & sck_now;
-
-  shift_sampler #(.WIDTH(1), .DEPTH(2)) sck_sampler (
-    .clk(clk), .rst_n(rst_n),
-    .in_data(sck),
-    .now(sck_now), .prev(sck_prev)
-  );
-
-  shift_sampler #(.WIDTH(1), .DEPTH(2)) mosi_sampler (
-    .clk(clk), .rst_n(rst_n),
-    .in_data(mosi),
-    .now(mosi_now), .prev()
-  );
-
   reg [2:0] bit_cnt;
-  reg [7:0] shift;
+  reg [7:0] shift_reg;
+
+  always @(posedge sck or negedge rst_n) begin
+    if (!rst_n) begin
+      shift_reg <= 0;
+      bit_cnt   <= 0;
+    end else if (!detect_only && !cs_n) begin
+      shift_reg <= {shift_reg[6:0], mosi};
+      bit_cnt   <= bit_cnt + 1;
+    end
+  end
 
   always @(posedge clk or negedge rst_n) begin
     if (!rst_n) begin
-      shift    <= 0;
-      bit_cnt  <= 0;
-      detected <= 0;
+      out_data  <= 0;
+      out_valid <= 0;
+    end else if (!detect_only && bit_cnt == 3'd7 && !cs_n) begin
+      out_data  <= {shift_reg[6:0], mosi};
+      out_valid <= 1;
     end else begin
-      detected <= 0;
-      if (!cs_n && sck_rising) begin
-        shift <= {shift[6:0], mosi_now};
-        bit_cnt <= bit_cnt + 1;
-        if (bit_cnt == 3'd7) begin
-          if (!detect_only) out_data <= {shift[6:0], mosi_now};
-          detected <= 1;
-        end
-      end
+      out_valid <= 0;
     end
   end
 
