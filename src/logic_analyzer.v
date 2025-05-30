@@ -125,8 +125,13 @@ module tt_um_logic_analyzer_combo (
   );
 
   trigger_capture trig (
-    .clk(clk), .rst_n(rst_n), .arm(arm),
-    .in_data(channels), .out_data(out_trigger)
+  .clk(clk),
+  .rst_n(rst_n),
+  .arm(arm),
+  .in_data(channels),
+  .pattern(ui_in[3:0]),
+  .mask(uio_in[3:0]),
+  .out_data(out_trigger)
   );
 
   edge_timestamper ts (
@@ -145,9 +150,14 @@ module tt_um_logic_analyzer_combo (
   );
 
   pattern_detector patt (
-    .clk(clk), .rst_n(rst_n),
-    .in_data(channels), .out_data(out_pattern)
+  .clk(clk),
+  .rst_n(rst_n),
+  .in_data(channels),
+  .pattern(ui_in[3:0]),
+  .mask(uio_in[3:0]),
+  .out_data(out_pattern)
   );
+
 
   // --- Replay Mode Logic ---
   reg [2:0] bit_cnt;
