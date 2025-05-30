@@ -1,110 +1,109 @@
 /*
+ * Tiny Tapeout Logic Analyzer Combo
  * SPDX-License-Identifier: Apache-2.0
  */
 
 `define default_netname none
 
 module tt_um_logic_analyzer_combo (
-    input  wire [7:0] ui_in,
-    output wire [7:0] uo_out,
-    input  wire [7:0] uio_in,
-    output wire [7:0] uio_out,
-    output wire [7:0] uio_oe,
-    input  wire       ena,
-    input  wire       clk,
-    input  wire       rst_n
+    input  wire [7:0] ui_in,    // Dedicated inputs
+    output wire [7:0] uo_out,   // Dedicated outputs
+    input  wire [7:0] uio_in,   // IOs: Input path
+    output wire [7:0] uio_out,  // IOs: Output path
+    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
+    input  wire       ena,      // Design enable
+    input  wire       clk,      // System clock
+    input  wire       rst_n     // System reset (active low)
 );
 
-  wire _unused = ena | &uio_in[6:1]; // Acknowledge unused uio_in[6:1]
-  assign uio_out[6:0] = 7'b0;
-  assign uio_oe[6:0]  = 7'b0;
+  // === Configuration and Channel Assignment ===
+  wire        auto_en      = ui_in[7];       // Use auto-detect
+  wire        raw_en       = ui_in[6];
+  wire        trig_en      = ui_in[5];
+  wire        ts_en        = ui_in[4];
+  wire        glitch_en    = ui_in[3];
+  wire        pulse_en     = ui_in[2];
+  wire        patt_en      = ui_in[1];
+  wire [1:0]  proto_sel    = ui_in[0] ? 2'b10 : 2'b00; // UART if set, SPI otherwise
 
-  wire [3:0] mode = ui_in[7:4];
-  wire arm = ui_in[4];
-  wire [3:0] channels = ui_in[3:0];
-  wire replay_en = (mode == 4'b1100);
-  wire autodetect_mode = (mode == 4'b1010);
+  wire [7:0] channels = uio_in;
 
-  // --- Protocol Selection FSM ---
-  reg [1:0] proto_sel;  // 00 = none, 01 = UART, 10 = SPI, 11 = I2C
-  wire uart_detected, spi_detected, i2c_detected;
+  // === Auto-Detect Flags ===
+  wire spi_detected, i2c_detected, uart_detected;
 
-  always @(posedge clk or negedge rst_n) begin
-    if (!rst_n)
-      proto_sel <= 2'b00;
-    else if (!autodetect_mode)
-      proto_sel <= 2'b00;
-    else if (proto_sel == 2'b00) begin
-      if (uart_detected)
-        proto_sel <= 2'b01;
-      else if (spi_detected)
-        proto_sel <= 2'b10;
-      else if (i2c_detected)
-        proto_sel <= 2'b11;
-    end
-  end
-
-  wire detect_only = autodetect_mode && (proto_sel == 2'b00);
-
-  wire raw_en    = (mode == 4'b0000);
-  wire trig_en   = (mode == 4'b0001);
-  wire ts_en     = (mode == 4'b0010);
-  wire glitch_en = (mode == 4'b0011);
-  wire pulse_en  = (mode == 4'b0100);
-  wire patt_en   = (mode == 4'b0101);
-  wire auto_en   = (mode == 4'b1010);
-
-  wire [7:0] out_raw, out_trigger, out_timestamp, out_glitch, out_pulse, out_pattern;
-
-  // --- Shared Decoders ---
+  // === Decoder Outputs ===
   wire [7:0] uart_out, spi_out, i2c_out;
-  wire uart_valid, spi_valid, i2c_valid;
+  wire       uart_valid, spi_valid, i2c_valid;
+
+  // === Pattern Detector Outputs ===
+  wire [7:0] out_pattern;
+  wire       patt_flag;
+  wire [7:0] patt_mask     = 8'hFF;
+  wire [7:0] patt_pattern  = 8'hA5;
+  wire       patt_edge     = 1'b0;
+
+  // === Trigger Outputs ===
+  wire [7:0] out_trigger;
+  wire [7:0] out_timestamp;
+  wire [7:0] out_glitch;
+  wire [7:0] out_pulse;
+  wire [7:0] out_raw;
+
+  // === Protocol Decoders ===
 
   uart_decoder uart (
-    .clk(clk), .rst_n(rst_n),
-    .rx(channels[0]),
-    .detect_only(detect_only),
-    .out_data(uart_out),
-    .valid(uart_valid),
-    .detected(uart_detected)
+    .clk(clk),
+    .rst_n(rst_n),
+    .rx(channels[3]),
+    .data_out(uart_out),
+    .out_valid(uart_valid),
+    .detect_only(!(auto_en || proto_sel == 2'b10))
   );
 
   spi_decoder spi (
-    .clk(clk), .rst_n(rst_n),
-    .sclk(channels[0]), .mosi(channels[1]), .csn(channels[2]),
-    .detect_only(detect_only),
-    .data_out(spi_out),
-    .valid(spi_valid),
-    .detected(spi_detected)
+    .clk(clk),
+    .rst_n(rst_n),
+    .sck(channels[0]),
+    .mosi(channels[1]),
+    .cs_n(channels[2]),
+    .out_data(spi_out),
+    .out_valid(spi_valid),
+    .detect_only(!(auto_en || proto_sel == 2'b00))
   );
 
   i2c_decoder i2c (
-    .clk(clk), .rst_n(rst_n),
-    .scl(channels[0]), .sda(channels[1]),
-    .detect_only(detect_only),
-    .data_out(i2c_out),
-    .valid(i2c_valid),
-    .detected(i2c_detected)
-  );
-
-  // --- FIFO Integration ---
-  wire [15:0] fifo_word;
-  wire fifo_valid;
-  wire dummy_overflow;
-
-  wire uart_mode = auto_en && proto_sel == 2'b01;
-  wire spi_mode  = auto_en && proto_sel == 2'b10;
-  wire i2c_mode  = auto_en && proto_sel == 2'b11;
-
-  wire [1:0] proto_id =
-    (uart_mode) ? 2'b00 :
-    (spi_mode)  ? 2'b01 :
-    (i2c_mode)  ? 2'b10 :
-                  2'b11;
-
-  fifo buffer (
     .clk(clk),
     .rst_n(rst_n),
+<<<<<<< HEAD
+    .scl(channels[4]),
+    .sda(channels[5]),
+    .out_data(i2c_out),
+    .out_valid(i2c_valid),
+    .detect_only(!(auto_en || proto_sel == 2'b01))
+  );
+
+  pattern_detector patt (
+    .clk(clk),
+    .rst_n(rst_n),
+    .in_data(channels),
+    .pattern(patt_pattern),
+    .mask(patt_mask),
+    .edge_only(patt_edge),
+    .detect_only(!patt_en),
+    .detected(patt_flag),
+    .out_data(out_pattern)
+  );
+
+  // === Data Outputs (examples only) ===
+  assign out_trigger   = 8'h01;
+  assign out_timestamp = 8'h02;
+  assign out_glitch    = 8'h03;
+  assign out_pulse     = 8'h04;
+  assign out_raw       = channels;
+
+  // === Output Selection Logic ===
+  wire [9:0] full_output = 
+=======
     .proto_id(proto_id),
     .data_in(uart_mode ? uart_out :
              spi_mode  ? spi_out  :
@@ -125,13 +124,8 @@ module tt_um_logic_analyzer_combo (
   );
 
   trigger_capture trig (
-  .clk(clk),
-  .rst_n(rst_n),
-  .arm(arm),
-  .in_data(channels),
-  .pattern(ui_in[3:0]),
-  .mask(uio_in[3:0]),
-  .out_data(out_trigger)
+    .clk(clk), .rst_n(rst_n), .arm(arm),
+    .in_data(channels), .out_data(out_trigger)
   );
 
   edge_timestamper ts (
@@ -150,14 +144,9 @@ module tt_um_logic_analyzer_combo (
   );
 
   pattern_detector patt (
-  .clk(clk),
-  .rst_n(rst_n),
-  .in_data(channels),
-  .pattern(ui_in[3:0]),
-  .mask(uio_in[3:0]),
-  .out_data(out_pattern)
+    .clk(clk), .rst_n(rst_n),
+    .in_data(channels), .out_data(out_pattern)
   );
-
 
   // --- Replay Mode Logic ---
   reg [2:0] bit_cnt;
@@ -205,19 +194,18 @@ module tt_um_logic_analyzer_combo (
 
   // --- Output Mux ---
   wire [7:0] selected_output =
+>>>>>>> parent of 82241d6 (modded pattern detector with configurable trigger)
     (auto_en && proto_sel == 2'b00) ? {5'b00000, i2c_detected, spi_detected, uart_detected} :
-    (uart_mode || spi_mode || i2c_mode) ? {fifo_word[15:14], fifo_word[7:0]} :
-    raw_en    ? out_raw :
-    trig_en   ? out_trigger :
-    ts_en     ? out_timestamp :
-    glitch_en ? out_glitch :
-    pulse_en  ? out_pulse :
-    patt_en   ? out_pattern :
-    8'h00;
+    raw_en    ? {2'b00, out_raw} :
+    trig_en   ? {2'b00, out_trigger} :
+    ts_en     ? {2'b00, out_timestamp} :
+    glitch_en ? {2'b00, out_glitch} :
+    pulse_en  ? {2'b00, out_pulse} :
+    patt_en   ? {2'b00, out_pattern} :
+    10'b0;
 
-  assign uo_out = selected_output;
-
-  // Silence unused
-  wire _unused2 = fifo_valid | &fifo_word[13:8];
+  assign uo_out  = full_output[7:0];
+  assign uio_out = 8'b0;
+  assign uio_oe  = 8'b0;
 
 endmodule
